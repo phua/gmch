@@ -4,18 +4,19 @@
 
 #include <stdint.h>
 
-#define MTU                 1500
-#define IEXTP_HEADER_LENGTH 40
-#define IEXTP_VERSION       0x01
-#define IEXTP_RESERVED      0x00
-#define IEXTP_TOPS          0x8003
-#define IEXTP_DEEP          0x8004
-#define IEXTP_CHANNEL       0x01
-#define SEQUENCED_MESSAGES  0x01
-#define BYTESTREAM          0x02
-#define SYMBOL_LENGTH       8
-#define REASON_LENGTH       4
-#define TOKEN_LENGTH        40
+#define MTU                  1500
+#define IEXTP_HEADER_LENGTH  40
+#define IEXTP_VERSION        0x01
+#define IEXTP_RESERVED       0x00
+#define IEXTP_TOPS           0x8003
+#define IEXTP_DEEP           0x8004
+#define IEXTP_CHANNEL        0x01
+#define IEXTP_MESSAGE_LENGTH 128
+#define SEQUENCED_MESSAGES   0x01
+#define BYTESTREAM           0x02
+#define SYMBOL_LENGTH        8
+#define REASON_LENGTH        4
+#define TOKEN_LENGTH         40
 
 typedef uint8_t  iextp_byte_t;
 typedef uint16_t iextp_short_t;
@@ -56,9 +57,9 @@ typedef struct IEXTP_Header IEXTP_GapFillTestResponse;
 struct IEXTP_MessageBlock
 {
   iextp_short_t msglen;
-  iextp_byte_t  msgdat[MTU];
+  iextp_byte_t  msgdat[IEXTP_MESSAGE_LENGTH];
 };
-_Static_assert(sizeof(struct IEXTP_MessageBlock) == 2 + MTU, "Unpacked struct IEXTP_MessageBlock");
+_Static_assert(sizeof(struct IEXTP_MessageBlock) == 2 + IEXTP_MESSAGE_LENGTH, "Unpacked struct IEXTP_MessageBlock");
 
 /* Administrative Message Formats */
 
