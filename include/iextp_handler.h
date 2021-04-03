@@ -4,6 +4,8 @@
 
 #include "iextp.h"
 
+#define _U_ __attribute__ ((__unused__))
+
 struct iextp_handler
 {
   struct iextp_handler *next;
@@ -46,11 +48,6 @@ struct iextp_handler *iextp_handler_append(struct iextp_handler *, struct iextp_
   V('5', PriceLevelUpdate)                      \
   V('8', PriceLevelUpdate)                      \
   V('A', AuctionInformation)
-
-#define ETABLE                                  \
-  E(Heartbeat)                                  \
-    E(GapFillTestResponse)                      \
-    E(SystemEvent)
 
 #define FTABLE                                  \
   F(SecurityDirectory)                          \
