@@ -25,22 +25,22 @@ struct iextp_config
 {
   char *confpath;
 
-  bool  filter;
-  bool  log;
-  char *logpath;
-  char *logpath_pcap;
-  char *logpath_live;
-  bool  db;
-  char *dbpath;
-  bool  mcast;
-  char *address;
-  char *service;
-  bool  sysmq;
-  char *keypath;
-  int   keyid;
-  char *pcappath;
-  char *token;
+  bool     filter;
   bitset_t msgtypes;
+  bool     log;
+  char    *logpath;
+  char    *logpath_pcap;
+  char    *logpath_live;
+  bool     db;
+  char    *dbpath;
+  bool     sysmq;
+  char    *keypath;
+  int      keyid;
+  bool     mcast;
+  char    *address;
+  char    *service;
+  char    *pcappath;
+  char    *token;
 };
 
 int iextp_config_init(struct iextp_config *);

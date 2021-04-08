@@ -62,7 +62,16 @@ int iextp_config_init(struct iextp_config *c)
   }
 
   if (json_object_object_get_ex(obj, "iextp_filter", &o)) {
-    c->filter = (bool) json_object_get_int(o);
+    if (json_object_object_get_ex(o, "enabled", &p)) {
+      c->filter = (bool) json_object_get_int(p);
+    }
+    if (json_object_object_get_ex(o, "msgtypes", &p)) {
+      c->msgtypes.digitcut = c->msgtypes.alphacut = 0;
+      const char *s = json_object_get_string(p);
+      for (int i = 0; i < json_object_get_string_len(p); i++) {
+        bitset_set(&c->msgtypes, s[i]);
+      }
+    }
   }
 
   if (json_object_object_get_ex(obj, "iextp_logger", &o)) {
@@ -83,18 +92,6 @@ int iextp_config_init(struct iextp_config *c)
     }
   }
 
-  if (json_object_object_get_ex(obj, "iextp_mcast", &o)) {
-    if (json_object_object_get_ex(o, "enabled", &p)) {
-      c->mcast = (bool) json_object_get_int(p);
-    }
-    if (json_object_object_get_ex(o, "address", &p)) {
-      c->address = strndup(json_object_get_string(p), json_object_get_string_len(p));
-    }
-    if (json_object_object_get_ex(o, "service", &p)) {
-      c->service = strndup(json_object_get_string(p), json_object_get_string_len(p));
-    }
-  }
-
   if (json_object_object_get_ex(obj, "iextp_sysmq", &o)) {
     if (json_object_object_get_ex(o, "enabled", &p)) {
       c->sysmq = (bool) json_object_get_int(p);
@@ -104,6 +101,18 @@ int iextp_config_init(struct iextp_config *c)
     }
     if (json_object_object_get_ex(o, "keyid", &p)) {
       c->keyid = json_object_get_int(p);
+    }
+  }
+
+  if (json_object_object_get_ex(obj, "iextp_mcast", &o)) {
+    if (json_object_object_get_ex(o, "enabled", &p)) {
+      c->mcast = (bool) json_object_get_int(p);
+    }
+    if (json_object_object_get_ex(o, "address", &p)) {
+      c->address = strndup(json_object_get_string(p), json_object_get_string_len(p));
+    }
+    if (json_object_object_get_ex(o, "service", &p)) {
+      c->service = strndup(json_object_get_string(p), json_object_get_string_len(p));
     }
   }
 
@@ -128,14 +137,6 @@ int iextp_config_init(struct iextp_config *c)
     }
   }
 
-  if (json_object_object_get_ex(obj, "iextp_msgtypes", &o)) {
-    c->msgtypes.digitcut = c->msgtypes.alphacut = 0;
-    const char *s = json_object_get_string(o);
-    for (int i = 0; i < json_object_get_string_len(o); i++) {
-      bitset_set(&c->msgtypes, s[i]);
-    }
-  }
-
   return 0;
 }
 
@@ -143,20 +144,6 @@ void iextp_config_dump(const struct iextp_config *c)
 {
   printf("confpath     : %s\n", c->confpath);
   printf("filter       : %d\n", c->filter);
-  printf("log          : %d\n", c->log);
-  printf("logpath      : %s\n", c->logpath);
-  printf("logpath_pcap : %s\n", c->logpath_pcap);
-  printf("logpath_live : %s\n", c->logpath_live);
-  printf("db           : %d\n", c->db);
-  printf("dbpath       : %s\n", c->dbpath);
-  printf("mcast        : %d\n", c->mcast);
-  printf("address      : %s\n", c->address);
-  printf("service      : %s\n", c->service);
-  printf("sysmq        : %d\n", c->sysmq);
-  printf("keypath      : %s\n", c->keypath);
-  printf("keyid        : %d\n", c->keyid);
-  printf("pcappath     : %s\n", c->pcappath);
-  printf("token        : %s\n", c->token);
   printf("msgtypes     : ");
   for (char i = '0'; i <= 'z'; i++) {
     if (bitset_get(&c->msgtypes, i) >= 0) {
@@ -164,6 +151,20 @@ void iextp_config_dump(const struct iextp_config *c)
     }
   }
   printf("\n");
+  printf("log          : %d\n", c->log);
+  printf("logpath      : %s\n", c->logpath);
+  printf("logpath_pcap : %s\n", c->logpath_pcap);
+  printf("logpath_live : %s\n", c->logpath_live);
+  printf("db           : %d\n", c->db);
+  printf("dbpath       : %s\n", c->dbpath);
+  printf("sysmq        : %d\n", c->sysmq);
+  printf("keypath      : %s\n", c->keypath);
+  printf("keyid        : %d\n", c->keyid);
+  printf("mcast        : %d\n", c->mcast);
+  printf("address      : %s\n", c->address);
+  printf("service      : %s\n", c->service);
+  printf("pcappath     : %s\n", c->pcappath);
+  printf("token        : %s\n", c->token);
 }
 
 int iextp_config_open(struct iextp_config *c, int argc, char *argv[])

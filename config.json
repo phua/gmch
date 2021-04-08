@@ -1,0 +1,37 @@
+{
+  "iextp_filter":{
+    "enabled":0,
+    "msgtypes":"DTXBQ58",
+    "symbols":[ "AAPL", "AMZN", "FB", "GOOG", "MSFT" ]
+  },
+  "iextp_logger":{
+    "enabled":1,
+    "logpath":"./log/iextp.out"
+  },
+  "iexdb_sqlite":{
+    "enabled":0,
+    "dbpath":"./data/iexdb.sqlite"
+  },
+  "iextp_sysmq":{
+    "enabled":1,
+    "keypath":"./data/key",
+    "keyid":666
+  },
+  "iextp_mcast":{
+    "enabled":0,
+    "address":"224.0.0.1",
+    "service":"5353"
+  },
+  "iextp_pcap":{
+    "logpath":"./log/iextp_pcap.out",
+    "pcappath":"./data/feeds/20180127_IEXTP1_TOPS1.6.pcap.gz"
+  },
+  "iextp_live":{
+    "logpath":"./log/iextp_live.out"
+  },
+  "iextp_term":{
+  },
+  "iextp_snap":{
+    "token":"TEST:password"
+  }
+}
