@@ -1,7 +1,20 @@
+#include <assert.h>
+#include <limits.h>
 #include <ctype.h>
 #include <time.h>
 
 #include "../include/iextp_logger.h"
+
+void bindump(FILE *f, uint64_t b, size_t n)
+{
+  for (size_t i = 0; i < n; i++) {
+    fputc(getbitf(b, i) ? '1' : '0', f);
+    if (i % CHAR_BIT + 1 == CHAR_BIT) {
+      fputs("  ", f);
+    }
+  }
+  fputc('\n', f);
+}
 
 void hexdump(FILE *f, const unsigned char *p, size_t n)
 {
@@ -181,6 +194,8 @@ int iextp_logger_init(struct iextp_logger *log)
 
 int iextp_logger_open(struct iextp_logger *log)
 {
+  assert(log->logpath);
+
   if (!log->log) {
     log->log = fopen(log->logpath, "w");
     if (!log->log) {

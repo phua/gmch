@@ -6,6 +6,9 @@
 
 #include "iextp_handler.h"
 
+#define setbitf(b, i) ((b) |= (1ULL << (i)))
+#define getbitf(b, i) ((b) &  (1ULL << (i)))
+
 struct iextp_logger
 {
   struct iextp_handler;         /* -fms-extensions */
