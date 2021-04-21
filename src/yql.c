@@ -14,13 +14,13 @@ struct JSONBuffer
   size_t size;
 };
 
-static CURL *easy;
-static char *cursym;
-
 GHashTable *quotes;
 GHashTable *summaries;
 GHashTable *charts;
 GHashTable *options;
+
+static CURL *easy;
+static JsonPath *path;
 
 int min(int x, int y)
 {
@@ -32,15 +32,16 @@ int max(int x, int y)
   return x >= y ? x : y;
 }
 
-static void *ght_get(GHashTable *t, char *k, size_t n)
+static void *ght_get(GHashTable *t, const char *k, size_t n)
 {
   void *v = g_hash_table_lookup(t, k);
   if (!v) {
     if ((k = strndup(k, YSTRING_LENGTH))) {
       if ((v = calloc(1, n))) {
-        g_hash_table_insert(t, k, v);
+        g_hash_table_insert(t, (char *) k, v);
       } else {
         perror("calloc");
+        free((char *) k);
       }
     } else {
       perror("strndup");
@@ -49,113 +50,106 @@ static void *ght_get(GHashTable *t, char *k, size_t n)
   return v;
 }
 
-static bool json_bool(JsonReader *r, const char *n, bool *v)
+static void json_bool(JsonReader *r, const char *n, void *v)
 {
-  if (json_reader_read_member(r, n)) {
-    *v = !json_reader_get_null_value(r) ? json_reader_get_boolean_value(r) : false;
+  if (json_reader_is_value(r)) {
+    *((bool *) v) = !json_reader_get_null_value(r) ? json_reader_get_boolean_value(r) : false;
+    return;
+  } else if (json_reader_read_member(r, n)) {
+    json_bool(r, "raw", v);
   } else {
     fprintf(stderr, "json_reader_read_member(%s)\n", n);
-    *v = false;
+    *((bool *) v) = false;
   }
   json_reader_end_member(r);
-  return *v;
 }
 
-static int64_t json_int(JsonReader *r, const char *n, int64_t *v)
+static void json_int(JsonReader *r, const char *n, void *v)
 {
-  *v = 0L;
-  if (json_reader_is_value(r) && !json_reader_get_null_value(r)) {
-    return *v = json_reader_get_int_value(r);
+  if (json_reader_is_value(r)) {
+    *((int64_t *) v) = !json_reader_get_null_value(r) ? json_reader_get_int_value(r) : 0L;
+    return;
   } else if (json_reader_read_member(r, n)) {
-    if (json_reader_is_object(r)) {
-      json_int(r, "raw", v);
-    } else if (!json_reader_get_null_value(r)) {
-      *v = json_reader_get_int_value(r);
-    }
+    json_int(r, "raw", v);
+  } else {
+    fprintf(stderr, "json_reader_read_member(%s)\n", n);
+    *((int64_t *) v) = 0L;
   }
   json_reader_end_member(r);
-  return *v;
 }
 
-static double json_double(JsonReader *r, const char *n, double *v)
+static void json_double(JsonReader *r, const char *n, void *v)
 {
-  *v = 0.0d;
-  if (json_reader_is_value(r) && !json_reader_get_null_value(r)) {
-    return *v = json_reader_get_double_value(r);
+  if (json_reader_is_value(r)) {
+    *((double *) v) = !json_reader_get_null_value(r) ? json_reader_get_double_value(r) : 0.0d;
+    return;
   } else if (json_reader_read_member(r, n)) {
-    if (json_reader_is_object(r)) {
-      json_double(r, "raw", v);
-    } else if (!json_reader_get_null_value(r)) {
-      *v = json_reader_get_double_value(r);
-    }
+    json_double(r, "raw", v);
+  } else {
+    fprintf(stderr, "json_reader_read_member(%s)\n", n);
+    *((double *) v) = 0.0d;
   }
   json_reader_end_member(r);
-  return *v;
+}
+
+static size_t json_string(JsonReader *r, const char *n, char *v)
+{
+  size_t length = 0;
+  if (json_reader_is_value(r)) {
+    const char *s = !json_reader_get_null_value(r) ? json_reader_get_string_value(r) : "\0";
+    strncpy(v, s, YSTRING_LENGTH);
+    v[YSTRING_LENGTH - 1] = 0;
+    return strlen(v);
+  } else if (json_reader_read_member(r, n)) {
+    if ((length = json_string(r, "fmt", v)) == 0) {
+      length = json_string(r, "longFmt", v);
+    }
+  } else {
+    fprintf(stderr, "json_reader_read_member(%s)\n", n);
+    strncpy(v, "\0", YSTRING_LENGTH);
+  }
+  json_reader_end_member(r);
+  return length;
 }
 
 static int json_array(JsonReader *r, const char *n, void *v, int m,
-                      void (*read)(JsonReader *, const char *, void *))
+                      void (*get)(JsonReader *, const char *, void *))
 {
+#define T int64_t
   int i = 0, j = 0, k = 0;
   if (json_reader_read_member(r, n) && json_reader_is_array(r)) {
-    k = json_reader_count_elements(r);
-    j = k > m ? k - m : 0;
+    k = json_reader_count_elements(r), j = k > m ? k - m : 0;
     for (i = j; i < k; i++) {
       if (json_reader_read_element(r, i)) {
-        read(r, n, (int64_t *) v + (i - j));
+        get(r, n, (T *) v + (i - j));
+      } else {
+        fprintf(stderr, "json_reader_read_member(%s[%d])\n", n, i);
       }
       json_reader_end_element(r);
     }
   } else {
-    memset(v, 0, sizeof(int64_t) * m);
+    fprintf(stderr, "json_reader_read_member(%s)\n", n);
+    memset(v, 0, sizeof(T) * m);
   }
   json_reader_end_member(r);
   return i - j;
+#undef T
 }
 
-static void json_int_val(JsonReader *r, const char *n, void *v)
+static int json_int_array(JsonReader *r, const char *n, int64_t v[], int m)
 {
-  json_int(r, n, (int64_t *) v);
+  return json_array(r, n, v, m, json_int);
 }
 
-static int json_int_arr(JsonReader *r, const char *n, int64_t v[], int m)
+static int json_double_array(JsonReader *r, const char *n, double v[], int m)
 {
-  return json_array(r, n, (void *) v, m, json_int_val);
+  return json_array(r, n, v, m, json_double);
 }
 
-static void json_double_val(JsonReader *r, const char *n, void *v)
-{
-  json_double(r, n, (double *) v);
-}
-
-static int json_double_arr(JsonReader *r, const char *n, double v[], int m)
-{
-  return json_array(r, n, (void *) v, m, json_double_val);
-}
-
-static char *json_string(JsonReader *r, const char *n, char *v)
-{
-  char *s = NULL;
-  if (json_reader_read_member(r, n)) {
-    if (json_reader_is_object(r)) {
-      if (!(s = json_string(r, "fmt", v))) {
-        s = json_string(r, "longFmt", v);
-      }
-    } else if (!json_reader_get_null_value(r)) {
-      s = strncpy(v, json_reader_get_string_value(r), YSTRING_LENGTH);
-      s[YSTRING_LENGTH - 1] = 0;
-    }
-  }
-  json_reader_end_member(r);
-  return s ? s : strncpy(v, "N/A", YSTRING_LENGTH);
-}
-
-struct YQuote *onQuote(JsonReader *r)
+static struct YQuote *json_quote(JsonReader *r, const char *s)
 {
   assert(json_reader_is_object(r));
-  char key[YSTRING_LENGTH];
-  json_string(r, "symbol", key);
-  struct YQuote *q = ght_get(quotes, key, sizeof(struct YQuote));
+  struct YQuote *q = ght_get(quotes, s, sizeof(struct YQuote));
 
   json_double (r, "ask", &q->ask);
   json_int    (r, "askSize", &q->askSize);
@@ -247,10 +241,10 @@ struct YQuote *onQuote(JsonReader *r)
   return q;
 }
 
-struct YQuoteSummary *onQuoteSummary(JsonReader *r)
+static struct YQuoteSummary *json_quoteSummary(JsonReader *r, const char *s)
 {
   assert(json_reader_is_object(r));
-  struct YQuoteSummary *q = ght_get(summaries, cursym, sizeof(struct YQuoteSummary));
+  struct YQuoteSummary *q = ght_get(summaries, s, sizeof(struct YQuoteSummary));
 
   if (json_reader_read_member(r, "assetProfile")) {
     json_string (r, "address1", q->address1);
@@ -322,13 +316,12 @@ struct YQuoteSummary *onQuoteSummary(JsonReader *r)
   return q;
 }
 
-struct YChart *onChart(JsonReader *r)
+static struct YChart *json_chart(JsonReader *r, const char *s)
 {
   assert(json_reader_is_object(r));
-  /* json_path_query("$.meta.symbol", json_reader_get_value(r), NULL); */
-  struct YChart *c = ght_get(charts, cursym, sizeof(struct YChart));
+  struct YChart *c = ght_get(charts, s, sizeof(struct YChart));
 
-  c->count = json_int_arr(r, "timestamp", c->timestamp, YARRAY_LENGTH);
+  c->count = json_int_array(r, "timestamp", c->timestamp, YARRAY_LENGTH);
 
   if (json_reader_read_member(r, "meta")) {
     json_string(r, "symbol", c->symbol);
@@ -342,7 +335,7 @@ struct YChart *onChart(JsonReader *r)
     if (json_reader_read_member(r, "adjclose") && json_reader_is_array(r)) {
       for (int i = 0; i < json_reader_count_elements(r); i++) {
         if (json_reader_read_element(r, i)) {
-          json_double_arr (r, "adjclose", c->adjclose, YARRAY_LENGTH);
+          json_double_array (r, "adjclose", c->adjclose, YARRAY_LENGTH);
         } else {
           fprintf(stderr, "json_reader_read_element(adjclose[%d])\n", i);
         }
@@ -356,11 +349,11 @@ struct YChart *onChart(JsonReader *r)
     if (json_reader_read_member(r, "quote") && json_reader_is_array(r)) {
       for (int i = 0; i < json_reader_count_elements(r); i++) {
         if (json_reader_read_element(r, i)) {
-          json_double_arr (r, "close", c->close, YARRAY_LENGTH);
-          json_double_arr (r, "high", c->high, YARRAY_LENGTH);
-          json_double_arr (r, "low", c->low, YARRAY_LENGTH);
-          json_double_arr (r, "open", c->open, YARRAY_LENGTH);
-          json_int_arr    (r, "volume", c->volume, YARRAY_LENGTH);
+          json_double_array (r, "close", c->close, YARRAY_LENGTH);
+          json_double_array (r, "high", c->high, YARRAY_LENGTH);
+          json_double_array (r, "low", c->low, YARRAY_LENGTH);
+          json_double_array (r, "open", c->open, YARRAY_LENGTH);
+          json_int_array    (r, "volume", c->volume, YARRAY_LENGTH);
         } else {
           fprintf(stderr, "json_reader_read_element(quote[%d])\n", i);
         }
@@ -378,7 +371,7 @@ struct YChart *onChart(JsonReader *r)
   return c;
 }
 
-struct YOption *onOption(JsonReader *r, struct YOption *o)
+static struct YOption *json_option(JsonReader *r, struct YOption *o)
 {
   assert(json_reader_is_object(r));
 
@@ -401,7 +394,8 @@ struct YOption *onOption(JsonReader *r, struct YOption *o)
   return o;
 }
 
-int onOptions(JsonReader *r, const char *n, struct YOption o[], int m, double k0, double kn _U_)
+static int json_options(JsonReader *r, const char *n, struct YOption o[], int m, double k0,
+                        double kn _U_)
 {
   assert(json_reader_is_object(r));
   int j = 0;
@@ -410,9 +404,9 @@ int onOptions(JsonReader *r, const char *n, struct YOption o[], int m, double k0
   if (json_reader_read_member(r, n) && json_reader_is_array(r)) {
     for (int i = 0; i < json_reader_count_elements(r) && j < m; i++) {
       if (json_reader_read_element(r, i)) {
-        k = json_double(r, "strike", &k);
+        json_double(r, "strike", &k);
         if (k0 <= k /* && k <= kn */) {
-          onOption(r, &o[j++]);
+          json_option(r, &o[j++]);
         }
       } else {
         fprintf(stderr, "json_reader_read_element(%s[%d])\n", n, i);
@@ -427,40 +421,39 @@ int onOptions(JsonReader *r, const char *n, struct YOption o[], int m, double k0
   return j;
 }
 
-struct YOptionChain *onOptionChain(JsonReader *r)
+static struct YOptionChain *json_optionChain(JsonReader *r, const char *s)
 {
   assert(json_reader_is_object(r));
-  /* json_path_query("$.underlyingSymbol", json_reader_get_value(r), NULL); */
-  struct YOptionChain *o = ght_get(options, cursym, sizeof(struct YOptionChain));
+  struct YOptionChain *o = ght_get(options, s, sizeof(struct YOptionChain));
 
   json_string(r, "underlyingSymbol", o->underlyingSymbol);
 
   struct YQuote *q = NULL;
   if (json_reader_read_member(r, "quote")) {
-    q = onQuote(r);
+    q = json_quote(r, o->underlyingSymbol);
   } else {
     fprintf(stderr, "json_reader_read_member(quote)\n");
     q = ght_get(quotes, o->underlyingSymbol, sizeof(struct YQuote));
   }
   json_reader_end_member(r);
 
-  double k = 0.0d, ka = 0.0d, kb = 0.0d;
+  double k _U_ = 0.0d, ka = 0.0d, kb = 0.0d;
   void findNearestStrikes(JsonReader *r, const char *n, double *ka, double *kb)
   {
     if (json_reader_read_member(r, n) && json_reader_is_array(r)) {
-      int n = json_reader_count_elements(r);
-      for (int i = 0; i < n; i++) {
+      int m = json_reader_count_elements(r);
+      for (int i = 0; i < m; i++) {
         if (json_reader_read_element(r, i)) {
-          k = json_reader_get_double_value(r);
+          double k = json_reader_get_double_value(r);
           if (k > q->regularMarketPrice) {
             json_reader_end_element(r);
 
             int a = i - (YARRAY_LENGTH / 2), b = i + (YARRAY_LENGTH / 2);
             if (a < 0) {
-              b = min(b + -a, n), a = max(0, a);
+              b = min(b + -a, m), a = max(0, a);
             }
-            if (b > n) {
-              a = max(0, a - (b - n)), b = min(b, n);
+            if (b > m) {
+              a = max(0, a - (b - m)), b = min(b, m);
             }
 
             if (json_reader_read_element(r, a)) {
@@ -475,12 +468,12 @@ struct YOptionChain *onOptionChain(JsonReader *r)
             break;
           }
         } else {
-          fprintf(stderr, "json_reader_read_element(strikes[%d])\n", i);
+          fprintf(stderr, "json_reader_read_element(%s[%d])\n", n, i);
         }
         json_reader_end_element(r);
       }
     } else {
-      fprintf(stderr, "json_reader_read_member(strikes)\n");
+      fprintf(stderr, "json_reader_read_member(%s)\n", n);
     }
     json_reader_end_member(r);
   }
@@ -491,8 +484,8 @@ struct YOptionChain *onOptionChain(JsonReader *r)
       if (json_reader_read_element(r, i)) {
         json_int  (r, "expirationDate", &o->expirationDate);
         json_bool (r, "hasMiniOptions", &o->hasMiniOptions);
-        o->countCalls = onOptions(r, "calls", o->calls, YARRAY_LENGTH, ka, kb);
-        o->countPuts  = onOptions(r, "puts", o->puts, YARRAY_LENGTH, ka, kb);
+        o->countCalls = json_options(r, "calls", o->calls, YARRAY_LENGTH, ka, kb);
+        o->countPuts  = json_options(r, "puts", o->puts, YARRAY_LENGTH, ka, kb);
       } else {
         fprintf(stderr, "json_reader_read_element(options[%d])\n", i);
       }
@@ -508,6 +501,8 @@ struct YOptionChain *onOptionChain(JsonReader *r)
 
 static int json_read(JsonNode *node)
 {
+  static YString symbol = "";
+
   JsonReader *reader = json_reader_new(node);
   if (json_reader_is_object(reader)) {
     if (json_reader_read_element(reader, 0)) {
@@ -532,24 +527,32 @@ static int json_read(JsonNode *node)
         }
       }
       json_reader_end_member(reader);
+
       if (json_reader_read_member(reader, "result")) {
         if (json_reader_is_array(reader)) {
+          JsonNode *matched = json_path_match(path, node);
+          JsonArray *matches = json_node_get_array(matched);
+          int notches = json_array_get_length(matches);
           for (int i = 0; i < json_reader_count_elements(reader); i++) {
             if (json_reader_read_element(reader, i)) {
+              if (i < notches) {
+                strncpy(symbol, json_array_get_string_element(matches, i), YSTRING_LENGTH);
+              }
               if (strcmp(response, "quoteResponse") == 0) {
-                onQuote(reader);
+                json_quote(reader, symbol);
               } else if (strcmp(response, "quoteSummary") == 0) {
-                onQuoteSummary(reader);
+                json_quoteSummary(reader, symbol);
               } else if (strcmp(response, "chart") == 0) {
-                onChart(reader);
+                json_chart(reader, symbol);
               } else if (strcmp(response, "optionChain") == 0) {
-                onOptionChain(reader);
+                json_optionChain(reader, symbol);
               } else {
-                fprintf(stderr, "Unknown response: %s\n", response);
+                fprintf(stderr, "YError: response=%s\n", response);
               }
             }
             json_reader_end_element(reader);
           }
+          json_node_unref(matched);
         }
       }
       json_reader_end_member(reader);
@@ -587,6 +590,9 @@ int yql_init()
   options = g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
 
   curl_global_init(CURL_GLOBAL_ALL);
+
+  path = json_path_new();
+  json_path_compile(path, "$..symbol", NULL);
 
   return 0;
 }
@@ -648,6 +654,8 @@ int yql_close()
 
 int yql_free()
 {
+  g_object_unref(path);
+
   curl_global_cleanup();
 
   g_hash_table_destroy(quotes);
@@ -677,7 +685,7 @@ static int yql_fetch(const char *url)
   return status;
 }
 
-static int yql_fetchv(const char *urlpath, ...)
+static int yql_vafetch(const char *urlpath, ...)
 {
   char *url = strdupa(urlpath);
   va_list args;
@@ -689,28 +697,26 @@ static int yql_fetchv(const char *urlpath, ...)
 
 int yql_quote(const char *s)
 {
-  return yql_fetchv(Y_QUOTE "?symbols=%s", cursym = strdupa(s));
+  return yql_vafetch(Y_QUOTE "?symbols=%s", s);
 }
 
 int yql_quoteSummary(const char *s)
 {
   /* modules=assetProfile,defaultKeyStatistics,esgScores,fundPerformance,fundProfile,topHolding */
-  return yql_fetchv(Y_SUMMARY "/%s?modules=assetProfile,defaultKeyStatistics", cursym = strdupa(s));
+  return yql_vafetch(Y_SUMMARY "/%s?modules=assetProfile,defaultKeyStatistics", s);
 }
 
 int yql_chart(const char *s)
 {
   /* interval := [ "2m", "1d", "1wk", "1mo" ] */
   /* range    := [ "1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max" ] */
-  return yql_fetchv(Y_CHART "/%s?symbol=%s"
-                    "&events=div|split|earn"
-                    "&includeAdjustedClose=true" "&includePrePost=true"
-                    "&interval=%s&range=%s"
-                    "&useYfid=true",
-                    cursym = strdupa(s), s, "1d", "1mo");
+  return yql_vafetch(Y_CHART "/%s?symbol=%s"
+                     "&events=div|split|earn" "&includeAdjustedClose=true" "&includePrePost=true"
+                     "&interval=%s&range=%s" "&useYfid=true",
+                     s, s, "1d", "1mo");
 }
 
 int yql_options(const char *s)
 {
-  return yql_fetchv(Y_OPTIONS "/%s?straddle=false", cursym = strdupa(s));
+  return yql_vafetch(Y_OPTIONS "/%s?straddle=false", s);
 }
