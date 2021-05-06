@@ -280,7 +280,7 @@ static struct YQuoteSummary *json_quoteSummary(JsonReader *r, const char *s)
     json_double (r, "enterpriseToEbitda", &q->enterpriseToEbitda);
     json_double (r, "enterpriseToRevenue", &q->enterpriseToRevenue);
     json_int    (r, "enterpriseValue", &q->enterpriseValue);
-    json_double (r, "fiftyTwoWeekChange", &q->fiftyTwoWeekChange);
+    json_double (r, "52WeekChange", &q->fiftyTwoWeekChange);
     json_int    (r, "floatShares", &q->floatShares);
     json_double (r, "forwardEps", &q->forwardEps);
     json_double (r, "forwardPE", &q->forwardPE);
