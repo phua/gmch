@@ -6,16 +6,10 @@
 /* #include <cdk.h> */
 
 #include "../include/gamaterm.h"
+#include "../include/config.h"
+#include "../include/pm.h"
 
 #define _U_ __attribute__ ((__unused__))
-
-#define CMDTYN 8
-#define INDEXN 9
-#define CRNCYN 10
-char *CMDTYS[CMDTYN] = { "CL=F", "GC=F", "SI=F", "LBS=F", "ES=F", "YM=F", "NQ=F", "RTY=F", };
-char *INDEXS[INDEXN] = { "^GSPC", "^DJI", "^IXIC", "^RUT", "^TNX", "^VIX", "^CMC200", "^FTSE", "^N225", };
-char *CRNCYS[CRNCYN] = { "BTC-USD", "BCH-USD", "BSV-USD", "ETH-USD", "ETC-USD", "DOGE-USD", "LTC-USD",
-  "EURUSD=X", "GBPUSD=X", "JPY=X", };
 
 int min(int, int);              /* yql.c */
 int max(int, int);              /* yql.c */
@@ -38,24 +32,12 @@ static char *strdate(int64_t ts)
   return strfdt(ts, "%b %d, %Y");
 }
 
-static char *strjoin(char *dest, char *src[], size_t n, const char *delim)
-{
-  for (size_t i = 0; i < n; i++) {
-    strncat(dest, src[i], strlen(src[i]));
-    strncat(dest, delim, strlen(delim));
-  }
-  return dest;
-}
-
 static int maxy, maxx, begy, begx, cury, curx;
 
 #define getallyx(win)                           \
   getmaxyx(win, maxy, maxx);                    \
   getbegyx(win, begy, begx);                    \
   getyx(win, cury, curx)
-
-#define DEBUG(f, ...)                           \
-  fprintf(stderr, f, __VA_ARGS__)
 
 #define DBGYX(s)                                                        \
   DEBUG("DBGYX %s: maxy=%d, maxx=%d, begy=%d, begx=%d, cury=%d, curx=%d\n", \
@@ -107,27 +89,26 @@ static int maxy, maxx, begy, begx, cury, curx;
 #define wclearl(win, y, x, w)                           \
   mvwprintw(win, (y), (x), "%*s", (w) - (x) - 1, "")
 
+static struct iextp_config *config;
+static GPtrArray *pfs;
+static int curpfs = 0;
+
+#define getcurrpfs() (g_ptr_array_index(pfs, curpfs))
+#define setnextpfs() (curpfs = (curpfs + 1) % pfs->len)
+#define setprevpfs() (curpfs = (curpfs + (pfs->len - 1)) % pfs->len)
+
+#define getcurrpan() (panels[curpan])
+#define setnextpan() (curpan = (curpan + 1) % (CLIENT + 1))
+#define setprevpan() (curpan = (curpan + CLIENT) % (CLIENT + 1))
+
 static WINDOW *w_nfo;
 static WINDOW *w_cmd;
-static char srchs[32];
-static int  srchi = 0;
+static YString srchs;
+static int srchi = 0;
 
 static PANEL *panels[CLIENT + 1];
 static enum PanelType curpan = HELP;
-static struct Spark sparks[CLIENT + 1] = {
-  { .pan = HELP  , .count = 0, },
-  { .pan = GOVT  , .count = 0, },
-  { .pan = CORP  , .count = 0, },
-  { .pan = MTGE  , .count = 0, },
-  { .pan = MMKT  , .count = 0, },
-  { .pan = MUNI  , .count = 0, },
-  { .pan = PFD   , .count = 0, },
-  { .pan = EQUITY, .count = 0, },
-  { .pan = CMDTY , .count = CMDTYN, .symbols = CMDTYS, },
-  { .pan = INDEX , .count = INDEXN, .symbols = INDEXS, },
-  { .pan = CRNCY , .count = CRNCYN, .symbols = CRNCYS, },
-  { .pan = CLIENT, .count = 0, },
-};
+static struct Spark *sparks[CLIENT + 1];
 
 static void repaint()
 {
@@ -152,7 +133,7 @@ static void reset(enum PanelType newpan)
   curpan = newpan;
   wclear(panels[curpan]->win);
   void Spark_print(struct Spark *);
-  Spark_print(&sparks[curpan]);
+  Spark_print(sparks[curpan]);
 }
 
 static void wprint_nfo(WINDOW *win)
@@ -215,6 +196,8 @@ static void wprint_help(WINDOW *win)
   mvwhline(win, y++, x, ACS_HLINE, maxx - MARGIN_X * 2);
   cp = COLOR_PAIR_BLUE;
   mvwaddstrcp(win, cp, y++, x, "<F(n)>               Refresh page");
+  mvwaddstrcp(win, cp, y++, x, "[<S>]-<TAB>          Previous / next portfolio");
+  mvwaddstrcp(win, cp, y++, x, "HJKL                 Previous / next page");
   mvwaddstrcp(win, cp, y++, x, "O                    Open portfolio");
   mvwaddstrcp(win, cp, y++, x, "Q                    Quit");
   mvwhline(win, y++, x, ACS_HLINE, maxx - MARGIN_X * 2);
@@ -410,14 +393,14 @@ static void wprint_options(WINDOW *win, struct YOptionChain *o)
   }
 }
 
-static void wprint_spark(WINDOW *win, char *s[], size_t n)
+static void wprint_spark(WINDOW *win, const GPtrArray *p)
 {
   getallyx(win);
   int y = MARGIN_Y + 3, x = MARGIN_X * 2, w = maxx / SparkLayoutC, cp = COLOR_PAIR_DEFAULT;
 
-  size_t m = min(n, maxy - y - MARGIN_Y * 2);
-  for (size_t i = y, j = 0; i < y + m && j < m; i++, j++) {
-    struct YQuote *q = g_hash_table_lookup(quotes, s[j]);
+  size_t n = min(p->len, maxy - y - MARGIN_Y * 2);
+  for (size_t i = y, j = 0; i < y + n && j < n; i++, j++) {
+    struct YQuote *q = g_hash_table_lookup(quotes, g_ptr_array_index(p, j));
     if (q) {
       cp = COLOR_PAIR_TITLE;
       mvwprintvcp(win, cp, i, x, w, SparkLayout[0], q->symbol);
@@ -437,12 +420,61 @@ static void wprint_spark(WINDOW *win, char *s[], size_t n)
   }
 }
 
+static void wprint_client(WINDOW *win)
+{
+  getallyx(win);
+  int y = MARGIN_Y + 1, x = MARGIN_X, w = maxx / ClientLayoutC, cp = COLOR_PAIR_DEFAULT;
+
+  struct Portfolio *p = getcurrpfs();
+  size_t n = min(p->positions->len, maxy - y - MARGIN_Y * 2 - 2);
+  size_t m = max(p->positions->len - n, 0);
+  for (size_t i = m; i < m + n; i++, y++) {
+    struct Position *q = g_ptr_array_index(p->positions, i);
+    cp = i % 2 ? COLOR_PAIR_BLUE : COLOR_PAIR_YELLOW;
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[0], q->symbol);
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[4], q->quantity);
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[5], q->price);
+    cp = COLOR_PAIR_CHANGE(q->change);
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[1], q->last);
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[2], q->change);
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[3], q->changePercent);
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[6], q->daysGain);
+    cp = COLOR_PAIR_CHANGE(q->last - q->price);
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[7], q->totalGain);
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[8], q->totalGainPercent);
+    mvwprintvcp(win, cp, y, x, w, ClientLayout[9], q->value);
+  }
+  mvwhline(win, ++y, x, ACS_HLINE, maxx - MARGIN_X * 2);
+  mvwprintval(win, y, x, w, ClientLayout[0], "TOTAL");
+  mvwprintval(win, y, x, w, ClientLayout[5], p->totalPrice);
+  mvwprintval(win, y, x, w, ClientLayout[6], p->totalDaysGain);
+  mvwprintval(win, y, x, w, ClientLayout[7], p->totalGain);
+  mvwprintval(win, y, x, w, ClientLayout[8], p->totalGainPercent);
+  mvwprintval(win, y, x, w, ClientLayout[9], p->totalValue);
+}
+
+static void wprint_risk(WINDOW *win)
+{
+  getallyx(win);
+  int y = MARGIN_Y, x = MARGIN_X, w = maxx / 14;
+
+  struct Portfolio *p = getcurrpfs();
+  mvwprintval(win, y, x, w, RiskLayout[0], p->alpha);
+  mvwprintval(win, y, x, w, RiskLayout[1], p->beta);
+  mvwprintval(win, y, x, w, RiskLayout[2], p->meanAnnualReturn);
+  mvwprintval(win, y, x, w, RiskLayout[3], p->rsquared);
+  mvwprintval(win, y, x, w, RiskLayout[4], p->stddev);
+  mvwprintval(win, y, x, w, RiskLayout[5], p->sharpe);
+  mvwprintval(win, y, x, w, RiskLayout[6], p->treynor);
+}
+
 void Spark_init(struct Spark *s)
 {
   WINDOW *win = panels[s->pan]->win;
   getallyx(win);
 
-  s->cursym[0] = s->query[0] = 0;
+  s->cursym = g_string_sized_new(8);
+  s->query = g_string_sized_new(8 * 4);
   switch (s->pan) {
   case HELP:
   case GOVT:
@@ -453,7 +485,7 @@ void Spark_init(struct Spark *s)
   case PFD:
     break;
   case EQUITY:
-    strncpy(s->cursym, "GME", YSTRING_LENGTH);
+    g_string_assign(s->cursym, "GME");
 
     s->w_quote         = subwin(win, maxy / 2, maxx / 2, begy + 0 * maxy / 2, begx + 0 * maxx / 2);
     s->w_options       = subwin(win, maxy / 2, maxx / 2, begy + 1 * maxy / 2, begx + 0 * maxx / 2);
@@ -462,22 +494,36 @@ void Spark_init(struct Spark *s)
     s->w_keyStatistics = subwin(win, maxy / 3, maxx / 2, begy + 2 * maxy / 3, begx + 1 * maxx / 2);
     break;
   case CMDTY:
+    s->symbols = config->g_cmdty;
+    goto SPARK_INIT;
   case INDEX:
+    s->symbols = config->g_index;
+    goto SPARK_INIT;
   case CRNCY:
-    strncpy(s->cursym, s->symbols[0], YSTRING_LENGTH);
-    strjoin(s->query, s->symbols, s->count, ",");
+    s->symbols = config->g_crncy;
+  SPARK_INIT:
+    if (s->symbols->len) {
+      g_string_assign(s->cursym, g_ptr_array_index(s->symbols, 0));
+    }
+    for (size_t i = 0; i < s->symbols->len; i++) {
+      g_string_append_printf(s->query, "%s,", (char *) g_ptr_array_index(s->symbols, i));
+    }
 
     s->w_quote = subwin(win, maxy / 2, maxx / 2, begy + 0 * maxy / 2, begx + 0 * maxx / 2);
     s->w_chart = subwin(win, maxy / 2, maxx / 2, begy + 0 * maxy / 2, begx + 1 * maxx / 2);
     s->w_spark = subwin(win, maxy / 2, maxx    , begy + 1 * maxy / 2, begx + 0 * maxx / 2);
     break;
   case CLIENT:
+    s->w_spark   = subwin(win, maxy - 3, maxx, begy    , begx);
+    s->w_options = subwin(win, 3       , maxx, begy + (maxy - 3), begx);
     break;
   }
 }
 
 void Spark_free(struct Spark *s)
 {
+  g_string_free(s->cursym, TRUE);
+  g_string_free(s->query, TRUE);
   switch (s->pan) {
   case HELP:
   case GOVT:
@@ -502,8 +548,11 @@ void Spark_free(struct Spark *s)
     delwin(s->w_spark);
     break;
   case CLIENT:
+    delwin(s->w_spark);
+    delwin(s->w_options);
     break;
   }
+  free(s);
 }
 
 void Spark_print(struct Spark *s)
@@ -540,7 +589,11 @@ void Spark_print(struct Spark *s)
     mvwhline(s->w_spark, 4, MARGIN_X, ACS_HLINE, maxx - MARGIN_X * 2);
     break;
   case CLIENT:
-    wprintvbox(panels[s->pan]->win);
+    wprintwbox(s->w_spark, 1, 1, ClientLayoutC, NULL, ClientLayout, ClientLayoutN);
+    wprintwbox(s->w_options, 1, 1, 7 * 2, NULL, RiskLayout, 7);
+
+    getallyx(s->w_spark);
+    mvwhline(s->w_spark, 2, MARGIN_X, ACS_HLINE, maxx - MARGIN_X * 2);
     break;
   }
 }
@@ -548,15 +601,15 @@ void Spark_print(struct Spark *s)
 static struct Spark *Spark_fromQuoteType(const char *q)
 {
   if (IS_EQUITY(q) || IS_ETF(q)) {
-    return &sparks[EQUITY];
+    return sparks[EQUITY];
   } else if (IS_FUTURE(q)) {
-    return &sparks[CMDTY];
+    return sparks[CMDTY];
   } else if (IS_INDEX(q)) {
-    return &sparks[INDEX];
+    return sparks[INDEX];
   } else if (IS_CURRENCY(q) || IS_CRYPTO(q)) {
-    return &sparks[CRNCY];
+    return sparks[CRNCY];
   } else {
-    return &sparks[curpan];
+    return sparks[curpan];
   }
 }
 
@@ -584,7 +637,6 @@ void Spark_update(const char *symbol)
             wprint_options(s->w_options, o);
           }
         }
-        /* wprint_client(sparks[CLIENT].w_spark); */
       }
       if (yql_chart(symbol) != -1) {
         struct YChart *c = g_hash_table_lookup(charts, symbol);
@@ -592,18 +644,39 @@ void Spark_update(const char *symbol)
           wprint_chart(s->w_chart, c);
         }
       }
-      if (s->count > 0 && yql_quote(s->query) != -1) {
-        wprint_spark(s->w_spark, s->symbols, s->count);
+      if (s->symbols && yql_quote(s->query->str) != -1) {
+        wprint_spark(s->w_spark, s->symbols);
       }
     }
   }
 }
 
+void Spark_updateClient()
+{
+  struct Portfolio *p = getcurrpfs();
+  if (yql_quote(p->query->str) != -1) {
+    Portfolio_reset(p);
+    for (unsigned int i = 0; i < p->positions->len; i++) {
+      struct Position *r = g_ptr_array_index(p->positions, i);
+      struct YQuote *q = g_hash_table_lookup(quotes, r->symbol);
+      if (q) {
+        Portfolio_update(p, i, q->regularMarketPrice, q->regularMarketChange, q->regularMarketChangePercent, q->regularMarketPreviousClose);
+      }
+    }
+    struct Spark *s = sparks[CLIENT];
+    reset(s->pan);
+    wprint_client(s->w_spark);
+    wprint_risk(s->w_options);
+  }
+}
+
 void Spark_refresh()
 {
-  struct Spark *s = &sparks[curpan];
-  if (s->cursym[0] != 0) {
-    Spark_update(s->cursym);
+  struct Spark *s = sparks[curpan];
+  if (s->cursym->len) {
+    Spark_update(s->cursym->str);
+  } else if (s->pan == CLIENT) {
+    Spark_updateClient();
   }
 }
 
@@ -643,7 +716,7 @@ static void wsearch_cmd(WINDOW *win)
     ENTER:
       srchs[srchi] = 0;
       Spark_update(srchs);
-      strncpy(sparks[curpan].cursym, srchs, srchi + 1);
+      g_string_assign(sparks[curpan]->cursym, srchs);
       goto ESC;
     case KEY_F(8):
       goto ENTER;
@@ -660,21 +733,26 @@ static void wsearch_cmd(WINDOW *win)
       return;
     case KEY_BACKSPACE:
     case 0177:
-      srchs[--srchi] = 0;
-      getyx(win, cury, curx);
-      mvwaddch(win, cury, curx - 1, ' ');
-      wmove(win, cury, curx - 1);
-      wrefresh(win);
+      if (srchi > 0) {
+        srchs[--srchi] = 0;
+        getyx(win, cury, curx);
+        mvwaddch(win, cury, curx - 1, ' ');
+        wmove(win, cury, curx - 1);
+        wrefresh(win);
+      }
       break;
     case '-':
+    case '0' ... '9':
     case '=':
     case 'A' ... 'Z':
     case '^':
     case 'a' ... 'z':
-      c = toupper(c);
-      srchs[srchi++] = c;
-      waddch(win, c);
-      wrefresh(win);
+      if (srchi < YSTRING_LENGTH - 1) {
+        c = toupper(c);
+        srchs[srchi++] = c;
+        waddch(win, c);
+        wrefresh(win);
+      }
       break;
     }
   }
@@ -711,6 +789,7 @@ static void init()
   keypad(w_cmd, TRUE);
   for (int i = 0; i <= CLIENT; i++) {
     panels[i] = new_panel(newwin(maxy - 3 * 2, maxx - MARGIN_X * 2, begy + 3, MARGIN_X));
+    sparks[i] = malloc(sizeof(struct Spark)), sparks[i]->pan = i;
   }
 }
 
@@ -719,11 +798,13 @@ static void start()
   yql_init();
   yql_open();
 
+  pfs = Portfolios_new(config->g_pfs);
+
   wprint_nfo(w_nfo);
   wprint_cmd(w_cmd);
   for (int i = 0; i <= CLIENT; i++) {
-    Spark_init(&sparks[i]);
-    Spark_print(&sparks[i]);
+    Spark_init(sparks[i]);
+    Spark_print(sparks[i]);
   }
 
   int c;
@@ -769,9 +850,31 @@ static void start()
       Spark_refresh();
       paint(curpan);
       break;
+    case 011:                   /* TAB */
+      setnextpfs();
+      goto REFRESH;
+    case 0541:                  /* S-TAB */
+      setprevpfs();
+      goto REFRESH;
     case '/':
       wsearch_cmd(w_cmd);
       break;
+    case KEY_DOWN:
+    case 'J':
+    case 'j':
+    case KEY_RIGHT:
+    case 'L':
+    case 'l':
+      setnextpan();
+      goto REFRESH;
+    case KEY_UP:
+    case 'K':
+    case 'k':
+    case KEY_LEFT:
+    case 'H':
+    case 'h':
+      setprevpan();
+      goto REFRESH;
     case 'Q':
     case 'q':
       return;
@@ -788,12 +891,14 @@ static void destroy()
   yql_close();
   yql_free();
 
+  g_ptr_array_free(pfs, TRUE);
+
   clear();
   wrefresh(stdscr);
   delwin(w_nfo);
   delwin(w_cmd);
   for (int i = 0; i <= CLIENT; i++) {
-    Spark_free(&sparks[i]);
+    Spark_free(sparks[i]);
     delwin(panels[i]->win);
     del_panel(panels[i]);
   }
@@ -821,9 +926,16 @@ int main(int argc _U_, char *argv[] _U_)
     perror("signal(SIGINT)");
   }
 
+  struct iextp_config c;
+  iextp_config_open(&c, argc, argv);
+  /* iextp_config_dump(&c); */
+  config = &c;
+
   init();
   start();
   destroy();
+
+  iextp_config_free(&c);
 
   return EXIT_SUCCESS;
 }

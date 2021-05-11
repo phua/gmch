@@ -50,6 +50,21 @@ int iextp_filter_init(struct iextp_filter *f)
   return 0;
 }
 
+GPtrArray *json_object_get_string_array(const struct json_object *obj, const char *key)
+{
+  GPtrArray *a = NULL;
+  struct json_object *o, *p;
+  if (json_object_object_get_ex(obj, key, &o)) {
+    size_t n = json_object_array_length(o);
+    a = g_ptr_array_new_full(n, free);
+    for (size_t i = 0; i < n; i++) {
+      p = json_object_array_get_idx(o, i);
+      g_ptr_array_add(a, strndup(json_object_get_string(p), json_object_get_string_len(p)));
+    }
+  }
+  return a;
+}
+
 int iextp_config_init(struct iextp_config *c)
 {
   assert(c->confpath);
@@ -137,34 +152,56 @@ int iextp_config_init(struct iextp_config *c)
     }
   }
 
+  c->g_equity = json_object_get_string_array(obj, "g_equity");
+  c->g_cmdty  = json_object_get_string_array(obj, "g_cmdty");
+  c->g_index  = json_object_get_string_array(obj, "g_index");
+  c->g_crncy  = json_object_get_string_array(obj, "g_crncy");
+  c->g_pfs    = json_object_get_string_array(obj, "g_pfs");
+
   return 0;
+}
+
+void dbgstr(void *data, void *user)
+{
+  DEBUG(user, data);
 }
 
 void iextp_config_dump(const struct iextp_config *c)
 {
-  printf("confpath     : %s\n", c->confpath);
-  printf("filter       : %d\n", c->filter);
-  printf("msgtypes     : ");
+  DEBUG("confpath     : %s\n", c->confpath);
+  DEBUG("filter       : %d\n", c->filter);
+  DEBUG("msgtypes     : %s", "");
   for (char i = '0'; i <= 'z'; i++) {
     if (bitset_get(&c->msgtypes, i) >= 0) {
-      printf("%c ", i);
+      DEBUG("%c ", i);
     }
   }
-  printf("\n");
-  printf("log          : %d\n", c->log);
-  printf("logpath      : %s\n", c->logpath);
-  printf("logpath_pcap : %s\n", c->logpath_pcap);
-  printf("logpath_live : %s\n", c->logpath_live);
-  printf("db           : %d\n", c->db);
-  printf("dbpath       : %s\n", c->dbpath);
-  printf("sysmq        : %d\n", c->sysmq);
-  printf("keypath      : %s\n", c->keypath);
-  printf("keyid        : %d\n", c->keyid);
-  printf("mcast        : %d\n", c->mcast);
-  printf("address      : %s\n", c->address);
-  printf("service      : %s\n", c->service);
-  printf("pcappath     : %s\n", c->pcappath);
-  printf("token        : %s\n", c->token);
+  DEBUG("%s\n", "");
+  DEBUG("log          : %d\n", c->log);
+  DEBUG("logpath      : %s\n", c->logpath);
+  DEBUG("logpath_pcap : %s\n", c->logpath_pcap);
+  DEBUG("logpath_live : %s\n", c->logpath_live);
+  DEBUG("db           : %d\n", c->db);
+  DEBUG("dbpath       : %s\n", c->dbpath);
+  DEBUG("sysmq        : %d\n", c->sysmq);
+  DEBUG("keypath      : %s\n", c->keypath);
+  DEBUG("keyid        : %d\n", c->keyid);
+  DEBUG("mcast        : %d\n", c->mcast);
+  DEBUG("address      : %s\n", c->address);
+  DEBUG("service      : %s\n", c->service);
+  DEBUG("pcappath     : %s\n", c->pcappath);
+  DEBUG("token        : %s\n", c->token);
+  DEBUG("g_equity     : %s", "");
+  g_ptr_array_foreach(c->g_equity, dbgstr, "%s,");
+  DEBUG("\ng_cmdty      : %s", "");
+  g_ptr_array_foreach(c->g_cmdty, dbgstr, "%s,");
+  DEBUG("\ng_index      : %s", "");
+  g_ptr_array_foreach(c->g_index, dbgstr, "%s,");
+  DEBUG("\ng_crncy      : %s", "");
+  g_ptr_array_foreach(c->g_crncy, dbgstr, "%s,");
+  DEBUG("\ng_pfs        : %s", "");
+  g_ptr_array_foreach(c->g_pfs, dbgstr, "%s,");
+  DEBUG("%s\n", "");
 }
 
 int iextp_config_open(struct iextp_config *c, int argc, char *argv[])
@@ -236,6 +273,11 @@ int iextp_config_free(struct iextp_config *c)
     free(c->keypath);
     /* free(c->pcappath); */
     free(c->token);
+    g_ptr_array_free(c->g_equity, TRUE);
+    g_ptr_array_free(c->g_cmdty, TRUE);
+    g_ptr_array_free(c->g_index, TRUE);
+    g_ptr_array_free(c->g_crncy, TRUE);
+    g_ptr_array_free(c->g_pfs, TRUE);
     return 0;
   }
   return 1;

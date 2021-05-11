@@ -3,8 +3,12 @@
 #define IEXTP_CONFIG_H
 
 #include <stdbool.h>
+#include <gmodule.h>
 
 #include "iextp_handler.h"
+
+#define DEBUG(f, ...)                           \
+  fprintf(stderr, f, __VA_ARGS__)
 
 typedef struct
 {
@@ -41,6 +45,12 @@ struct iextp_config
   char    *service;
   char    *pcappath;
   char    *token;
+
+  GPtrArray *g_equity;
+  GPtrArray *g_cmdty;
+  GPtrArray *g_index;
+  GPtrArray *g_crncy;
+  GPtrArray *g_pfs;
 };
 
 int iextp_config_init(struct iextp_config *);

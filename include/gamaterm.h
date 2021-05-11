@@ -75,10 +75,9 @@ enum PanelType
 struct Spark
 {
   enum PanelType pan;
-  size_t  count;
-  char  **symbols;
-  YString cursym;
-  YText   query;
+  GPtrArray *symbols;           /*< char * */
+  GString *cursym;
+  GString *query;
 
   WINDOW *w_quote;
   WINDOW *w_assetProfile;
@@ -124,5 +123,6 @@ extern struct Layout SparkLayout[];
 #define ClientLayoutN 10
 #define ClientLayoutC 10
 extern struct Layout ClientLayout[];
+extern struct Layout RiskLayout[];
 
 #endif

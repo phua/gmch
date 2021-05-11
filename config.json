@@ -33,5 +33,22 @@
   },
   "iextp_snap":{
     "token":"TEST:password"
-  }
+  },
+  "g_equity":[
+    "AAPL", "AMZN", "FB", "GOOG", "MSFT",
+  ],
+  "g_cmdty":[
+    "CL=F", "GC=F", "SI=F", "LB=F", "ES=F", "YM=F", "NQ=F", "RTY=F", "ZT=F", "ZF=F", "ZN=F", "ZB=F",
+  ],
+  "g_index":[
+    "^GSPC", "^DJI", "^IXIC", "^RUT", "^TNX", "^VIX", "^CMC200", "^FTSE", "^N225",
+  ],
+  "g_crncy":[
+    "BTC-USD", "BCH-USD", "BSV-USD", "ETH-USD", "ETC-USD", "DOGE-USD", "LTC-USD", "EURUSD=X", "GBPUSD=X", "JPY=X",
+  ],
+  "g_pfs":[
+    "./data/positions.csv",
+    "./data/PortfolioDownload.csv",
+    "./data/WatchListDownload.csv",
+  ],
 }

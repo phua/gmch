@@ -143,3 +143,13 @@ struct Layout ClientLayout[] = {
   { .key = "Total Gain %", .fmt = "%'10.2f" , .keyy = 0, .keyx = 8, .valy = 1, .valx = 8 },
   { .key = "Value $"     , .fmt = "%'10.2f" , .keyy = 0, .keyx = 9, .valy = 1, .valx = 9 },
 };
+
+struct Layout RiskLayout[] = {
+  { .key = "α"      , .fmt = "%.2f", .keyy = 0, .keyx =  0, .valy = 0, .valx =  1 },
+  { .key = "β"      , .fmt = "%.2f", .keyy = 0, .keyx =  2, .valy = 0, .valx =  3 },
+  { .key = "MAR"    , .fmt = "%.2f", .keyy = 0, .keyx =  4, .valy = 0, .valx =  5 },
+  { .key = "R²"     , .fmt = "%.2f", .keyy = 0, .keyx =  6, .valy = 0, .valx =  7 },
+  { .key = "σ"      , .fmt = "%.2f", .keyy = 0, .keyx =  8, .valy = 0, .valx =  9 },
+  { .key = "Sharpe" , .fmt = "%.2f", .keyy = 0, .keyx = 10, .valy = 0, .valx = 11 },
+  { .key = "Treynor", .fmt = "%.2f", .keyy = 0, .keyx = 12, .valy = 0, .valx = 13 },
+};
