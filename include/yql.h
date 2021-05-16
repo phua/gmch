@@ -22,6 +22,16 @@
 typedef char YString[YSTRING_LENGTH];
 typedef char YText[YTEXT_LENGTH];
 
+#define YERROR_CODE        "Not Found"
+#define YERROR_DESCRIPTION "No data found, symbol may be delisted"
+
+struct YError
+{
+  YString response;
+  YString code;
+  YText   description;
+};
+
 struct YQuote
 {
   double  ask;
@@ -232,10 +242,12 @@ struct YOptionChain
   struct YOption puts [YARRAY_LENGTH];
 };
 
-extern GHashTable *quotes;      /* YString -> struct Quote * */
-extern GHashTable *summaries;   /* YString -> struct QuoteSummary * */
-extern GHashTable *charts;      /* YString -> struct Chart * */
-extern GHashTable *options;     /* YString -> struct OptionChain * */
+extern struct YError y_error;
+
+extern GHashTable *quotes;     /*< YString -> struct Quote * */
+extern GHashTable *summaries;  /*< YString -> struct QuoteSummary * */
+extern GHashTable *charts;     /*< YString -> struct Chart * */
+extern GHashTable *options;    /*< YString -> struct OptionChain * */
 
 int yql_init();
 int yql_open();

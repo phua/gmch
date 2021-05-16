@@ -14,6 +14,8 @@ struct JSONBuffer
   size_t size;
 };
 
+struct YError y_error;
+
 GHashTable *quotes;
 GHashTable *summaries;
 GHashTable *charts;
@@ -58,7 +60,7 @@ static void json_bool(JsonReader *r, const char *n, void *v)
   } else if (json_reader_read_member(r, n)) {
     json_bool(r, "raw", v);
   } else {
-    fprintf(stderr, "json_reader_read_member(%s)\n", n);
+    /* fprintf(stderr, "json_reader_read_member(%s)\n", n); */
     *((bool *) v) = false;
   }
   json_reader_end_member(r);
@@ -72,7 +74,7 @@ static void json_int(JsonReader *r, const char *n, void *v)
   } else if (json_reader_read_member(r, n)) {
     json_int(r, "raw", v);
   } else {
-    fprintf(stderr, "json_reader_read_member(%s)\n", n);
+    /* fprintf(stderr, "json_reader_read_member(%s)\n", n); */
     *((int64_t *) v) = 0L;
   }
   json_reader_end_member(r);
@@ -86,7 +88,7 @@ static void json_double(JsonReader *r, const char *n, void *v)
   } else if (json_reader_read_member(r, n)) {
     json_double(r, "raw", v);
   } else {
-    fprintf(stderr, "json_reader_read_member(%s)\n", n);
+    /* fprintf(stderr, "json_reader_read_member(%s)\n", n); */
     *((double *) v) = 0.0d;
   }
   json_reader_end_member(r);
@@ -105,7 +107,7 @@ static size_t json_string(JsonReader *r, const char *n, char *v)
       length = json_string(r, "longFmt", v);
     }
   } else {
-    fprintf(stderr, "json_reader_read_member(%s)\n", n);
+    /* fprintf(stderr, "json_reader_read_member(%s)\n", n); */
     strncpy(v, "\0", YSTRING_LENGTH);
   }
   json_reader_end_member(r);
@@ -123,12 +125,12 @@ static int json_array(JsonReader *r, const char *n, void *v, int m,
       if (json_reader_read_element(r, i)) {
         get(r, n, (T *) v + (i - j));
       } else {
-        fprintf(stderr, "json_reader_read_member(%s[%d])\n", n, i);
+        /* fprintf(stderr, "json_reader_read_member(%s[%d])\n", n, i); */
       }
       json_reader_end_element(r);
     }
   } else {
-    fprintf(stderr, "json_reader_read_member(%s)\n", n);
+    /* fprintf(stderr, "json_reader_read_member(%s)\n", n); */
     memset(v, 0, sizeof(T) * m);
   }
   json_reader_end_member(r);
@@ -509,20 +511,20 @@ static int json_read(JsonNode *node)
       const char *response = json_reader_get_member_name(reader);
       if (json_reader_read_member(reader, "error")) {
         if (!json_reader_get_null_value(reader)) {
-          const char *code, *description;
+          strncpy(y_error.response, response, YSTRING_LENGTH);
           if (json_reader_read_member(reader, "code")) {
             if (!json_reader_get_null_value(reader)) {
-              code = json_reader_get_string_value(reader);
+              strncpy(y_error.code, json_reader_get_string_value(reader), YSTRING_LENGTH);
             }
           }
           json_reader_end_member(reader);
           if (json_reader_read_member(reader, "description")) {
             if (!json_reader_get_null_value(reader)) {
-              description = json_reader_get_string_value(reader);
+              strncpy(y_error.description, json_reader_get_string_value(reader), YTEXT_LENGTH);
             }
           }
           json_reader_end_member(reader);
-          fprintf(stderr, "YError: response=%s, code=%s, description=%s\n", response, code, description);
+          fprintf(stderr, "YError: response=%s, code=%s, description=%s\n", y_error.response, y_error.code, y_error.description);
           return -1;
         }
       }
@@ -530,10 +532,17 @@ static int json_read(JsonNode *node)
 
       if (json_reader_read_member(reader, "result")) {
         if (json_reader_is_array(reader)) {
+          int n = json_reader_count_elements(reader);
+          if (n == 0) {
+            strncpy(y_error.response, response, YSTRING_LENGTH);
+            strncpy(y_error.code, "YError: " YERROR_CODE, YSTRING_LENGTH);
+            strncpy(y_error.description, YERROR_DESCRIPTION, YTEXT_LENGTH);
+            return -1;
+          }
           JsonNode *matched = json_path_match(path, node);
           JsonArray *matches = json_node_get_array(matched);
           int notches = json_array_get_length(matches);
-          for (int i = 0; i < json_reader_count_elements(reader); i++) {
+          for (int i = 0; i < n; i++) {
             if (json_reader_read_element(reader, i)) {
               if (i < notches) {
                 strncpy(symbol, json_array_get_string_element(matches, i), YSTRING_LENGTH);
@@ -702,7 +711,6 @@ int yql_quote(const char *s)
 
 int yql_quoteSummary(const char *s)
 {
-  /* modules=assetProfile,defaultKeyStatistics,esgScores,fundPerformance,fundProfile,topHolding */
   return yql_vafetch(Y_SUMMARY "/%s?modules=assetProfile,defaultKeyStatistics", s);
 }
 
@@ -713,7 +721,7 @@ int yql_chart(const char *s)
   return yql_vafetch(Y_CHART "/%s?symbol=%s"
                      "&events=div|split|earn" "&includeAdjustedClose=true" "&includePrePost=true"
                      "&interval=%s&range=%s" "&useYfid=true",
-                     s, s, "1d", "1mo");
+                     s, s, "1d", "3mo");
 }
 
 int yql_options(const char *s)

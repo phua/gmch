@@ -14,6 +14,12 @@
 int min(int, int);              /* yql.c */
 int max(int, int);              /* yql.c */
 
+#define tm_day (60 * 60 * 24)
+#define tm_cnt (7 * 4 * 3)
+
+static time_t tm_bod, tm_bow, tm_bom, tm_bop, tm_eop;
+static struct tm stm_bod, stm_bow;
+
 static char *strfdt(int64_t ts, const char *s)
 {
   static char buf[80];          /* Not thread-safe */
@@ -30,6 +36,110 @@ static char *strdatetime(int64_t ts)
 static char *strdate(int64_t ts)
 {
   return strfdt(ts, "%b %d, %Y");
+}
+
+static char *strwdate(int64_t ts)
+{
+  return strfdt(ts, "%a %b %d, %Y");
+}
+
+static char *strptime(int64_t ts)
+{
+  return strfdt(ts, "%I:%M %p");
+}
+
+struct Event *Event_new(enum EventType type, int64_t timestamp, char *symbol, char *shortName)
+{
+  struct Event *e = malloc(sizeof(struct Event));
+  e->next = NULL;
+  e->type = type;
+  e->timestamp = timestamp;
+  e->symbol = symbol;
+  e->shortName = shortName;
+  return e;
+}
+
+void Event_destroy(struct Event *e)
+{
+  struct Event *p = e, *q = NULL;
+  while (p) {
+    q = p->next;
+    free(p);
+    p = q;
+  }
+}
+
+int Event_cmp(const struct Event *p, const struct Event *q)
+{
+  int cmp = 0;
+  return (cmp = strcmp(p->symbol, q->symbol)) ? cmp :
+    (cmp = p->type - q->type) ? cmp : p->timestamp - q->timestamp;
+}
+
+int Event_insert(struct Event **d, struct Event *e)
+{
+  if (*d) {
+    struct Event *p = *d, *q = NULL;
+    int cmp = 0;
+    while (p && (cmp = Event_cmp(p, e)) < 0) {
+      q = p, p = p->next;
+    }
+    if (cmp) {
+      if (q) {
+        e->next = q->next, q->next = e;
+      } else {
+        *d = e, e->next = p;
+      }
+      return 1;
+    }
+  } else {
+    *d = e;
+    return 1;
+  }
+  return 0;
+}
+
+void EventDate_init(struct EventDate *e)
+{
+  for (int i = 0; i < tm_cnt; i++) {
+    e[i].date = tm_bop + i * tm_day;
+    e[i].count = 0;
+    e[i].events = NULL;
+  }
+}
+
+void EventDate_free(struct EventDate *e)
+{
+  for (int i = 0; i < tm_cnt; i++) {
+    e[i].count = 0;
+    Event_destroy(e[i].events);
+    e[i].events = NULL;
+  }
+}
+
+void EventDate_insert(struct EventDate *d, struct Event *e)
+{
+#define eventdate_index(d, tm) (d + (((tm) - tm_bop) / tm_day))
+  d = eventdate_index(d, e->timestamp);
+  d->count += Event_insert(&d->events, e);
+}
+
+void EventDate_add(struct EventDate *d, enum EventType type, int64_t timestamp, char *symbol, char *shortName)
+{
+  struct Event *e = Event_new(type, timestamp, symbol, shortName);
+  EventDate_insert(d, e);
+}
+
+static void updateEvent(void *symbol _U_, void *quote, void *calendar)
+{
+  struct YQuote *q = quote;
+#define event_contains(tm) (tm_bop <= (tm) && (tm) < tm_eop)
+  if (event_contains(q->earningsTimestampStart)) {
+    EventDate_add(calendar, EARNINGS, q->earningsTimestampStart, q->symbol, q->shortName);
+  }
+  if (event_contains(q->dividendDate)) {
+    EventDate_add(calendar, DIVIDEND, q->dividendDate, q->symbol, q->shortName);
+  }
 }
 
 static int maxy, maxx, begy, begx, cury, curx;
@@ -53,7 +163,7 @@ static int maxy, maxx, begy, begx, cury, curx;
   waddstrcp(win, cp, s)
 
 #define mvwaddstrcn(win, cp, y, x, w, s)                                \
-  mvwaddstrcp(win, cp, (y), (x) + (((w) - (x) * 2 - strlen(s)) / 2), s)
+  mvwaddstrcp(win, cp, (y), (x) + (((w) - (1) * 2 - strlen(s)) / 2), s)
 
 #define wprintwcp(win, cp, f, ...)              \
   wattron(win, cp);                             \
@@ -89,34 +199,47 @@ static int maxy, maxx, begy, begx, cury, curx;
 #define wclearl(win, y, x, w)                           \
   mvwprintw(win, (y), (x), "%*s", (w) - (x) - 1, "")
 
-static struct iextp_config *config;
-static GPtrArray *pfs;
-static int curpfs = 0;
+static PANEL *panels[CLIENT + 1];
+static enum PanelType curpan = HELP;
+static struct Spark *sparks[CLIENT + 1];
 
-#define getcurrpfs() (g_ptr_array_index(pfs, curpfs))
-#define setnextpfs() (curpfs = (curpfs + 1) % pfs->len)
-#define setprevpfs() (curpfs = (curpfs + (pfs->len - 1)) % pfs->len)
-
-#define getcurrpan() (panels[curpan])
-#define setnextpan() (curpan = (curpan + 1) % (CLIENT + 1))
-#define setprevpan() (curpan = (curpan + CLIENT) % (CLIENT + 1))
-
+static PANEL *bigpan;
+static WINDOW *w_err;
 static WINDOW *w_nfo;
 static WINDOW *w_cmd;
 static YString srchs;
 static int srchi = 0;
 
-static PANEL *panels[CLIENT + 1];
-static enum PanelType curpan = HELP;
-static struct Spark *sparks[CLIENT + 1];
+static struct iextp_config *config;
+static GPtrArray *portfolios;
+static int curpfm = 0;
+static struct EventDate calendar[tm_cnt];
+
+#define setnext(i, n) (i = ((i) + 1) % (n))
+#define setprev(i, n) (i = ((i) + ((n) - 1)) % (n))
+
+#define getcurrpan()  (panels[curpan])
+#define setnextpan()  (setnext(curpan, CLIENT + 1))
+#define setprevpan()  (setprev(curpan, CLIENT + 1))
+#define getcurrwin()  (panels[curpan]->win)
+#define getcurrspk()  (sparks[curpan])
+
+#define getcurrpfm()  (g_ptr_array_index(portfolios, curpfm))
+#define setnextpfm()  (setnext(curpfm, portfolios->len))
+#define setprevpfm()  (setprev(curpfm, portfolios->len))
+
+static void prepaint()
+{
+  update_panels();
+  doupdate();
+}
 
 static void repaint()
 {
   wnoutrefresh(stdscr);
   touchwin(panels[curpan]->win);
   wnoutrefresh(panels[curpan]->win);
-  update_panels();
-  doupdate();
+  prepaint();
 }
 
 static void paint(enum PanelType newpan)
@@ -124,8 +247,7 @@ static void paint(enum PanelType newpan)
   hide_panel(panels[curpan]);
   curpan = newpan;
   show_panel(panels[curpan]);
-  update_panels();
-  doupdate();
+  prepaint();
 }
 
 static void reset(enum PanelType newpan)
@@ -134,6 +256,64 @@ static void reset(enum PanelType newpan)
   wclear(panels[curpan]->win);
   void Spark_print(struct Spark *);
   Spark_print(sparks[curpan]);
+}
+
+static WINDOW *wbox_new(int n)
+{
+  getallyx(stdscr);
+  double h = maxy / n, w = maxx / n, m = (n - 1.0) / (2.0 * n);
+  return newwin(h, w, begy + maxy * m, begx + maxx * m);
+}
+
+static bool getch_go()
+{
+  while (1) {
+    switch (getch()) {
+    case ASKEY_ENTER:
+      return true;
+    case ASKEY_ESC:             /* ESCDELAY */
+    case 'Q':
+    case 'q':
+      return false;
+    }
+  }
+  /* __builtin_unreachable(); */
+  return false;
+}
+
+static void mpaint(PANEL *p)
+{
+  hide_panel(panels[curpan]);
+  show_panel(p);
+  prepaint();
+  getch_go();
+  hide_panel(p);
+  show_panel(panels[curpan]);
+  prepaint();
+}
+
+static void wprint_alert(WINDOW *win, const char *resp, const char *code, const char *desc, const char *symbol)
+{
+  getallyx(win);
+  int y = MARGIN_Y, x = MARGIN_X;
+
+  wclear(win);
+  box(win, 0, 0);
+  mvwaddstrcn(win, COLOR_PAIR_ERROR, y++, x, maxx, code);
+  mvwhline(win, y++, x, ACS_HLINE, maxx - x * 2);
+  mvwaddstrcp(win, COLOR_PAIR_KEY, y, x, "symbol: ");
+  waddstr(win, symbol);
+  mvwprintwcp(win, COLOR_PAIR_KEY, ++y, x, "%s.description: ", resp);
+  mvwaddstr(win, ++y, MARGIN_X + x, desc);
+  mvwaddstrcn(win, COLOR_PAIR_GO    , maxy - 2, x + 0 * maxx / 2, maxx / 2, TERM_GO);
+  mvwaddstrcn(win, COLOR_PAIR_CANCEL, maxy - 2, x + 1 * maxx / 2, maxx / 2, TERM_CANCEL);
+  wrefresh(win);
+  getch_go();
+}
+
+static void wprint_error(WINDOW *win, struct YError *err, const char *symbol)
+{
+  wprint_alert(win, err->response, err->code, err->description, symbol);
 }
 
 static void wprint_nfo(WINDOW *win)
@@ -197,7 +377,9 @@ static void wprint_help(WINDOW *win)
   cp = COLOR_PAIR_BLUE;
   mvwaddstrcp(win, cp, y++, x, "<F(n)>               Refresh page");
   mvwaddstrcp(win, cp, y++, x, "[<S>]-<TAB>          Previous / next portfolio");
-  mvwaddstrcp(win, cp, y++, x, "HJKL                 Previous / next page");
+  mvwaddstrcp(win, cp, y++, x, "hjkl                 Previous / next page");
+  mvwaddstrcp(win, cp, y++, x, "E                    Events calendar");
+  mvwaddstrcp(win, cp, y++, x, "H                    Historical data");
   mvwaddstrcp(win, cp, y++, x, "O                    Open portfolio");
   mvwaddstrcp(win, cp, y++, x, "Q                    Quit");
   mvwhline(win, y++, x, ACS_HLINE, maxx - MARGIN_X * 2);
@@ -403,7 +585,7 @@ static void wprint_spark(WINDOW *win, const GPtrArray *p)
     struct YQuote *q = g_hash_table_lookup(quotes, g_ptr_array_index(p, j));
     if (q) {
       cp = COLOR_PAIR_TITLE;
-      mvwprintvcp(win, cp, i, x, w, SparkLayout[0], q->symbol);
+      mvwprintvcp(win, cp, i, x, w, SparkLayout[0], q->shortName);
       cp = COLOR_PAIR_CHANGE(q->regularMarketChange);
       mvwprintvcp(win, cp, i, x, w, SparkLayout[1], q->regularMarketPrice, q->regularMarketChangePercent);
       cp = COLOR_PAIR_CHANGE(q->regularMarketOpen - q->regularMarketPreviousClose);
@@ -425,7 +607,7 @@ static void wprint_client(WINDOW *win)
   getallyx(win);
   int y = MARGIN_Y + 1, x = MARGIN_X, w = maxx / ClientLayoutC, cp = COLOR_PAIR_DEFAULT;
 
-  struct Portfolio *p = getcurrpfs();
+  struct Portfolio *p = getcurrpfm();
   size_t n = min(p->positions->len, maxy - y - MARGIN_Y * 2 - 2);
   size_t m = max(p->positions->len - n, 0);
   for (size_t i = m; i < m + n; i++, y++) {
@@ -458,7 +640,7 @@ static void wprint_risk(WINDOW *win)
   getallyx(win);
   int y = MARGIN_Y, x = MARGIN_X, w = maxx / 14;
 
-  struct Portfolio *p = getcurrpfs();
+  struct Portfolio *p = getcurrpfm();
   mvwprintval(win, y, x, w, RiskLayout[0], p->alpha);
   mvwprintval(win, y, x, w, RiskLayout[1], p->beta);
   mvwprintval(win, y, x, w, RiskLayout[2], p->meanAnnualReturn);
@@ -466,6 +648,74 @@ static void wprint_risk(WINDOW *win)
   mvwprintval(win, y, x, w, RiskLayout[4], p->stddev);
   mvwprintval(win, y, x, w, RiskLayout[5], p->sharpe);
   mvwprintval(win, y, x, w, RiskLayout[6], p->treynor);
+}
+
+static void wprintp_hist(PANEL *pan)
+{
+  WINDOW *win = pan->win;
+  struct Spark *s = getcurrspk();
+  if (s->cursym->len) {
+    if (yql_chart(s->cursym->str) != -1) {
+      struct YChart *c = g_hash_table_lookup(charts, s->cursym->str);
+      if (c) {
+        wclear(win);
+        wprintwbox(win, 3, 2, ChartLayoutC, "Historical Data", ChartLayout, ChartLayoutN);
+        wprint_chart(win, c);
+        mpaint(pan);
+      } else {
+        wprint_alert(w_err, "hist", "Internal error", "No data found", s->cursym->str);
+      }
+    } else {
+      wprint_error(w_err, &y_error, s->cursym->str);
+    }
+  } else {
+    wprint_alert(w_err, "hist", "User error", "No symbol found: {<F(n)> H}", "");
+  }
+}
+
+static void wprintp_event(PANEL *pan, struct EventDate *cal)
+{
+  WINDOW *win = pan->win;
+  getallyx(win);
+  int y = MARGIN_Y, x = MARGIN_X, cp = COLOR_PAIR_DEFAULT;
+
+  wclear(win);
+  box(win, 0, 0);
+  mvwaddstrcp(win, COLOR_PAIR_TITLE, y++, x, "Events Calendar");
+  waddstr(win, " (");
+  waddstrcp(win, COLOR_PAIR_DIVIDEND, "Dividend");
+  waddstr(win, ", ");
+  waddstrcp(win, COLOR_PAIR_EARNINGS, "Earnings");
+  waddstr(win, ", ");
+  waddstrcp(win, COLOR_PAIR_SPLIT, "Split");
+  waddstr(win, ")");
+
+  int n = maxy - y - MARGIN_Y * 2, c = 0;
+  void _flow()
+  {                             /* TODO */
+    if (y >= n && c < 3) {
+      y = MARGIN_Y + 1, x = ++c * (maxx / 3);
+    }
+  }
+
+  g_hash_table_foreach(quotes, updateEvent, cal);
+  for (int i = 0; i < tm_cnt; i++) {
+    int64_t dt = cal[i].date;
+    struct Event *e = cal[i].events;
+    if (e) {
+      _flow();
+      cp = COLOR_PAIR_KEY | (dt >= tm_bod && dt < tm_bod + tm_day ? A_REVERSE : 0);
+      mvwaddstrcp(win, cp, ++y, x + MARGIN_X * 1, strwdate(dt));
+      while (e) {
+        _flow();
+        cp = COLOR_PAIR_EVENT(e->type);
+        mvwprintwcp(win, cp, ++y, x + MARGIN_X * 2, "%-8s %-32s", e->symbol, e->shortName);
+        wprintw(win, "%s", strptime(e->timestamp));
+        e = e->next;
+      }
+    }
+  }
+  mpaint(pan);
 }
 
 void Spark_init(struct Spark *s)
@@ -600,7 +850,7 @@ void Spark_print(struct Spark *s)
 
 static struct Spark *Spark_fromQuoteType(const char *q)
 {
-  if (IS_EQUITY(q) || IS_ETF(q)) {
+  if (IS_ECNQUOTE(q) || IS_EQUITY(q) || IS_ETF(q)) {
     return sparks[EQUITY];
   } else if (IS_FUTURE(q)) {
     return sparks[CMDTY];
@@ -609,11 +859,11 @@ static struct Spark *Spark_fromQuoteType(const char *q)
   } else if (IS_CURRENCY(q) || IS_CRYPTO(q)) {
     return sparks[CRNCY];
   } else {
-    return sparks[curpan];
+    return getcurrspk();
   }
 }
 
-void Spark_update(const char *symbol)
+int Spark_update(const char *symbol)
 {
   if (yql_quote(symbol) != -1) {
     struct YQuote *q = g_hash_table_lookup(quotes, symbol);
@@ -630,30 +880,45 @@ void Spark_update(const char *symbol)
             wprint_keyStatistics(s->w_keyStatistics, q);
             mvwprintq_beta(s->w_quote, q->beta);
           }
+        } else {
+          wprint_error(w_err, &y_error, symbol);
         }
         if (yql_options(symbol) != -1) {
           struct YOptionChain *o = g_hash_table_lookup(options, symbol);
           if (o) {
             wprint_options(s->w_options, o);
           }
+        } else {
+          wprint_error(w_err, &y_error, symbol);
         }
+        /* updateEvent(cal, q); */
       }
       if (yql_chart(symbol) != -1) {
         struct YChart *c = g_hash_table_lookup(charts, symbol);
         if (c) {
           wprint_chart(s->w_chart, c);
         }
+      } else {
+        wprint_error(w_err, &y_error, symbol);
       }
-      if (s->symbols && yql_quote(s->query->str) != -1) {
-        wprint_spark(s->w_spark, s->symbols);
+      if (s->symbols) {
+        if (yql_quote(s->query->str) != -1) {
+          wprint_spark(s->w_spark, s->symbols);
+        } else {
+          wprint_error(w_err, &y_error, symbol);
+        }
       }
     }
+  } else {
+    wprint_error(w_err, &y_error, symbol);
+    return -1;
   }
+  return 0;
 }
 
 void Spark_updateClient()
 {
-  struct Portfolio *p = getcurrpfs();
+  struct Portfolio *p = getcurrpfm();
   if (yql_quote(p->query->str) != -1) {
     Portfolio_reset(p);
     for (unsigned int i = 0; i < p->positions->len; i++) {
@@ -672,7 +937,7 @@ void Spark_updateClient()
 
 void Spark_refresh()
 {
-  struct Spark *s = sparks[curpan];
+  struct Spark *s = getcurrspk();
   if (s->cursym->len) {
     Spark_update(s->cursym->str);
   } else if (s->pan == CLIENT) {
@@ -712,11 +977,12 @@ static void wsearch_cmd(WINDOW *win)
   while ((c = wgetch(win))) {
     switch (c) {
     case KEY_ENTER:
-    case 015:
+    case ASKEY_ENTER:
     ENTER:
       srchs[srchi] = 0;
-      Spark_update(srchs);
-      g_string_assign(sparks[curpan]->cursym, srchs);
+      if (Spark_update(srchs) != -1) {
+        g_string_assign(sparks[curpan]->cursym, srchs);
+      }
       goto ESC;
     case KEY_F(8):
       goto ENTER;
@@ -727,12 +993,12 @@ static void wsearch_cmd(WINDOW *win)
     case KEY_F(11):             /* strappend(srchs, "=X"); or "-USD" */
       goto ENTER;
     case KEY_EIC:
-    case 033:
+    case ASKEY_ESC:
     ESC:
       wclear_cmd(win, TERM_PROMPT);
       return;
     case KEY_BACKSPACE:
-    case 0177:
+    case ASKEY_BACKSPACE:
       if (srchi > 0) {
         srchs[--srchi] = 0;
         getyx(win, cury, curx);
@@ -756,6 +1022,33 @@ static void wsearch_cmd(WINDOW *win)
       break;
     }
   }
+}
+
+static void inittm()
+{
+  time_t tm = time(NULL);
+  struct tm *stm = localtime(&tm);
+  stm->tm_sec = 0, stm->tm_min = 0, stm->tm_hour = 0;
+  tm_bod = mktime(stm);
+  localtime_r(&tm_bod, &stm_bod);
+
+  memcpy(stm, &stm_bod, sizeof(struct tm));
+  stm->tm_mday -= stm->tm_wday - 1;
+  tm_bow = mktime(stm);
+  localtime_r(&tm_bow, &stm_bow);
+
+  memcpy(stm, &stm_bod, sizeof(struct tm));
+  stm->tm_mday = 1;
+  tm_bom = mktime(stm);
+  if (stm->tm_wday % 6 == 0) {
+    stm->tm_mday += (stm->tm_wday + 6) / 6;
+    tm_bom = mktime(stm);
+  }
+
+  tm_bop = tm_bow;
+  memcpy(stm, &stm_bow, sizeof(struct tm));
+  stm->tm_mday += tm_cnt;
+  tm_eop = mktime(stm);
 }
 
 static void init()
@@ -784,6 +1077,8 @@ static void init()
   }
 
   getallyx(stdscr);
+  bigpan = new_panel(newwin(maxy - 3 * 2, maxx - MARGIN_X * 2, begy + 3, MARGIN_X));
+  w_err = wbox_new(4);
   w_nfo = derwin(stdscr, 3, maxx - MARGIN_X * 2, begy    , MARGIN_X);
   w_cmd = derwin(stdscr, 3, maxx - MARGIN_X * 2, maxy - 3, MARGIN_X);
   keypad(w_cmd, TRUE);
@@ -795,10 +1090,13 @@ static void init()
 
 static void start()
 {
+  inittm();
+
   yql_init();
   yql_open();
 
-  pfs = Portfolios_new(config->g_pfs);
+  portfolios = Portfolios_new(config->g_pfs);
+  EventDate_init(calendar);
 
   wprint_nfo(w_nfo);
   wprint_cmd(w_cmd);
@@ -811,7 +1109,6 @@ static void start()
   while ((c = getch())) {
     switch (c) {
     case KEY_F(1):
-    case 071:                   /* CTX_MENU */
       curpan = HELP;
       goto REFRESH;
     case KEY_F(2):
@@ -850,31 +1147,34 @@ static void start()
       Spark_refresh();
       paint(curpan);
       break;
-    case 011:                   /* TAB */
-      setnextpfs();
+    case ASKEY_TAB:
+      setnextpfm();
       goto REFRESH;
-    case 0541:                  /* S-TAB */
-      setprevpfs();
+    case ASKEY_STAB:
+      setprevpfm();
       goto REFRESH;
     case '/':
       wsearch_cmd(w_cmd);
       break;
     case KEY_DOWN:
-    case 'J':
     case 'j':
     case KEY_RIGHT:
-    case 'L':
     case 'l':
       setnextpan();
       goto REFRESH;
     case KEY_UP:
-    case 'K':
     case 'k':
     case KEY_LEFT:
-    case 'H':
     case 'h':
       setprevpan();
       goto REFRESH;
+    case 'E':
+    case 'e':
+      wprintp_event(bigpan, calendar);
+      break;
+    case 'H':
+      wprintp_hist(bigpan);
+      break;
     case 'Q':
     case 'q':
       return;
@@ -891,10 +1191,14 @@ static void destroy()
   yql_close();
   yql_free();
 
-  g_ptr_array_free(pfs, TRUE);
+  g_ptr_array_free(portfolios, TRUE);
+  EventDate_free(calendar);
 
   clear();
   wrefresh(stdscr);
+  delwin(bigpan->win);
+  del_panel(bigpan);
+  delwin(w_err);
   delwin(w_nfo);
   delwin(w_cmd);
   for (int i = 0; i <= CLIENT; i++) {
